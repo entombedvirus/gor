@@ -22,6 +22,7 @@ func NewHTTPModifier(config *HTTPModifierConfig) *HTTPModifier {
 		len(config.paramHashFilters) == 0 &&
 		len(config.params) == 0 &&
 		len(config.headers) == 0 &&
+		len(config.paramFilters) == 0 &&
 		len(config.methods) == 0 {
 		return nil
 	}
@@ -150,6 +151,31 @@ func (m *HTTPModifier) Rewrite(payload []byte) (response []byte) {
 
 				break
 			}
+		}
+	}
+
+	if len(m.config.paramFilters) > 0 {
+		matched := false
+
+		params := proto.Params(payload)
+		if len(params) == 0 {
+			return
+		}
+
+	outer:
+		for pn, pvs := range params {
+			for _, pv := range pvs {
+				for _, pf := range m.config.paramFilters {
+					if bytes.Equal(pf.Name, []byte(pn)) && bytes.Equal(pf.Value, []byte(pv)) {
+						matched = true
+						break outer
+					}
+				}
+			}
+		}
+
+		if !matched {
+			return
 		}
 	}
 

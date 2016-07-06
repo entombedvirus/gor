@@ -18,6 +18,8 @@ package proto
 
 import (
 	"bytes"
+	"net/url"
+
 	"github.com/buger/gor/byteutils"
 )
 
@@ -286,6 +288,27 @@ func SetPathParam(payload, name, value []byte) []byte {
 	copy(newPath[len(path):], newParam)
 
 	return SetPath(payload, newPath)
+}
+
+func Params(payload []byte) (params url.Values) {
+	path := Path(payload)
+	if idx := bytes.IndexByte(path, '?'); idx > -1 {
+		path = path[idx+1:]
+		params, _ = url.ParseQuery(string(path))
+	} else {
+		params = make(url.Values)
+	}
+
+	if bytes.Equal([]byte("POST"), Method(payload)) {
+		if ct := Header(payload, []byte("Content-Type")); bytes.Equal([]byte("application/x-www-form-urlencoded"), ct) {
+			bodyParams, _ := url.ParseQuery(string(Body(payload)))
+			for pn, pv := range bodyParams {
+				params[pn] = append(params[pn], pv...)
+			}
+		}
+	}
+
+	return params
 }
 
 // SetHost updates Host header for HTTP/1.1 or updates host in path for HTTP/1.0 or Proxy requests

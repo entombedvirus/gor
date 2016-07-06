@@ -17,6 +17,7 @@ type HTTPModifierConfig struct {
 	headerNegativeFilters HTTPHeaderFilters
 	headerHashFilters     HTTPHashFilters
 	paramHashFilters      HTTPHashFilters
+	paramFilters          HTTPParams
 
 	params  HTTPParams
 	headers HTTPHeaders
