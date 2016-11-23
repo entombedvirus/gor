@@ -115,8 +115,6 @@ func NewListener(addr string, port string, engine int, trackResponse bool, expir
 	// Special case for testing
 	if l.port != 0 {
 		switch engine {
-		case EngineRawSocket:
-			go l.readRAWSocket()
 		case EnginePcap:
 			go l.readPcap()
 		case EnginePcapFile:
@@ -181,6 +179,7 @@ func (t *Listener) dispatchMessage(message *TCPMessage) {
 			delete(t.respAliases, message.Ack)
 			delete(t.respWithoutReq, message.Ack)
 		}
+
 		return
 	}
 
@@ -337,7 +336,7 @@ func (t *Listener) readPcap() {
 				var allAddr []string
 				for _, dc := range devices {
 					for _, addr := range dc.Addresses {
-						allAddr = append(allAddr, "(dst host " + addr.IP.String() + " and src host " + addr.IP.String() + ")")
+						allAddr = append(allAddr, "(dst host "+addr.IP.String()+" and src host "+addr.IP.String()+")")
 					}
 				}
 
@@ -422,6 +421,7 @@ func (t *Listener) readPcap() {
 				data = packet.Data()[of:]
 
 				version := uint8(data[0]) >> 4
+				ipLength := int(binary.BigEndian.Uint16(data[2:4]))
 
 				if version == 4 {
 					ihl := uint8(data[0]) & 0x0F
@@ -433,6 +433,24 @@ func (t *Listener) readPcap() {
 
 					srcIP = data[12:16]
 					dstIP = data[16:20]
+
+					// Too small IP packet
+					if ipLength < 20 {
+						continue
+					}
+
+					// Invalid length
+					if int(ihl*4) > ipLength {
+						continue
+					}
+
+					if cmp := len(data) - ipLength; cmp > 0 {
+						data = data[:ipLength]
+					} else if cmp < 0 {
+						// Truncated packet
+						continue
+					}
+
 					data = data[ihl*4:]
 				} else {
 					// Truncated IP info
@@ -447,15 +465,16 @@ func (t *Listener) readPcap() {
 				}
 
 				// Truncated TCP info
-				if len(data) < 13 {
+				if len(data) <= 13 {
 					continue
 				}
 
 				dataOffset := (data[12] & 0xF0) >> 4
+				isFIN := data[13]&0x01 != 0
 
 				// We need only packets with data inside
 				// Check that the buffer is larger than the size of the TCP header
-				if len(data) > int(dataOffset*4) {
+				if len(data) > int(dataOffset*4) || isFIN {
 					if !bpfSupported {
 						destPort := binary.BigEndian.Uint16(data[2:4])
 						srcPort := binary.BigEndian.Uint16(data[0:2])
@@ -536,16 +555,23 @@ func (t *Listener) readPcapFile() {
 			var addr, data []byte
 
 			if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
-			  tcp, _ := tcpLayer.(*layers.TCP)
-			  data = append(tcp.LayerContents(), tcp.LayerPayload()...)
-			  copy(data[2:4], []byte{0, 1})
+				tcp, _ := tcpLayer.(*layers.TCP)
+				data = append(tcp.LayerContents(), tcp.LayerPayload()...)
+
+				if tcp.SrcPort >= 32768 && tcp.SrcPort <= 61000 {
+					copy(data[0:2], []byte{0, 0})
+					copy(data[2:4], []byte{0, 1})
+				} else {
+					copy(data[0:2], []byte{0, 1})
+					copy(data[2:4], []byte{0, 0})
+				}
 			} else {
 				continue
 			}
 
 			if ipLayer := packet.Layer(layers.LayerTypeIPv4); ipLayer != nil {
-			  ip, _ := ipLayer.(*layers.IPv4)
-			  addr = ip.SrcIP
+				ip, _ := ipLayer.(*layers.IPv4)
+				addr = ip.SrcIP
 			} else if ipLayer = packet.Layer(layers.LayerTypeIPv6); ipLayer != nil {
 				ip, _ := ipLayer.(*layers.IPv6)
 				addr = ip.SrcIP
@@ -555,10 +581,11 @@ func (t *Listener) readPcapFile() {
 			}
 
 			dataOffset := (data[12] & 0xF0) >> 4
+			isFIN := data[13]&0x01 != 0
 
 			// We need only packets with data inside
 			// Check that the buffer is larger than the size of the TCP header
-			if len(data) <= int(dataOffset*4) {
+			if len(data) <= int(dataOffset*4) && !isFIN {
 				continue
 			}
 
@@ -642,8 +669,6 @@ func (t *Listener) processTCPPacket(packet *TCPPacket) {
 		}
 	}()
 
-	// log.Println("Processing packet:", packet.Ack, packet.Seq, packet.ID)
-
 	var message *TCPMessage
 
 	isIncoming := packet.DestPort == t.port
@@ -670,6 +695,14 @@ func (t *Listener) processTCPPacket(packet *TCPPacket) {
 
 		t.ackAliases[packet.Ack] = parentAck
 		packet.UpdateAck(parentAck)
+	}
+
+	if isIncoming && packet.IsFIN {
+		if ma, ok := t.respAliases[packet.Seq]; ok {
+			if ma.packets[0].SrcPort == packet.SrcPort {
+				packet.UpdateAck(ma.Ack)
+			}
+		}
 	}
 
 	if alias, ok := t.ackAliases[packet.Ack]; ok {
@@ -743,14 +776,17 @@ func (t *Listener) processTCPPacket(packet *TCPPacket) {
 
 	// If message contains only single packet immediately dispatch it
 	if message.complete {
+		// log.Println("COMPLETE!", isIncoming, message)
 		if isIncoming {
-			// log.Println("I'm finished", string(message.Bytes()), message.ResponseID, t.messages)
 			if t.trackResponse {
+				// log.Println("Found response!", message.ResponseID, t.messages)
+
 				if resp, ok := t.messages[message.ResponseID]; ok {
-					t.dispatchMessage(message)
 					if resp.complete {
 						t.dispatchMessage(resp)
 					}
+
+					t.dispatchMessage(message)
 				}
 			} else {
 				t.dispatchMessage(message)

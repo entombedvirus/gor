@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/tls"
+	"encoding/base64"
 	"io"
 	"log"
 	"net"
@@ -44,6 +45,7 @@ type HTTPClient struct {
 	baseURL        string
 	scheme         string
 	host           string
+	auth           string
 	conn           net.Conn
 	respBuf        []byte
 	config         *HTTPClientConfig
@@ -56,15 +58,6 @@ func NewHTTPClient(baseURL string, config *HTTPClientConfig) *HTTPClient {
 	}
 
 	u, _ := url.Parse(baseURL)
-	if !strings.Contains(u.Host, ":") {
-		if u.Scheme != "http" {
-			u.Host += ":" + defaultPorts[u.Scheme]
-		}
-	}
-
-	if config.Timeout.Nanoseconds() == 0 {
-		config.Timeout = 5 * time.Second
-	}
 
 	config.ConnectionTimeout = config.Timeout
 
@@ -79,6 +72,10 @@ func NewHTTPClient(baseURL string, config *HTTPClientConfig) *HTTPClient {
 	client.respBuf = make([]byte, config.ResponseBufferSize)
 	client.config = config
 
+	if u.User != nil {
+		client.auth = "Basic " + base64.StdEncoding.EncodeToString([]byte(u.User.String()))
+	}
+
 	return client
 }
 
@@ -86,13 +83,13 @@ func (c *HTTPClient) Connect() (err error) {
 	c.Disconnect()
 
 	if !strings.Contains(c.host, ":") {
-		c.conn, err = net.DialTimeout("tcp", c.host+":80", c.config.ConnectionTimeout)
+		c.conn, err = net.DialTimeout("tcp", c.host + ":" + defaultPorts[c.scheme], c.config.ConnectionTimeout)
 	} else {
 		c.conn, err = net.DialTimeout("tcp", c.host, c.config.ConnectionTimeout)
 	}
 
 	if c.scheme == "https" {
-		tlsConn := tls.Client(c.conn, &tls.Config{InsecureSkipVerify: true})
+		tlsConn := tls.Client(c.conn, &tls.Config{InsecureSkipVerify: true, ServerName: c.host})
 
 		if err = tlsConn.Handshake(); err != nil {
 			return
@@ -162,6 +159,10 @@ func (c *HTTPClient) Send(data []byte) (response []byte, err error) {
 
 	if !c.config.OriginalHost {
 		data = proto.SetHost(data, []byte(c.baseURL), []byte(c.host))
+	}
+
+	if c.auth != "" {
+		data = proto.SetHeader(data, []byte("Authorization"), []byte(c.auth))
 	}
 
 	if c.config.Debug {
@@ -310,6 +311,11 @@ func (c *HTTPClient) Send(data []byte) (response []byte, err error) {
 
 			return c.Send(redirectPayload)
 		}
+	}
+
+	if bytes.Equal(proto.Status(payload), []byte("400")) {
+		c.Disconnect()
+		Debug("[HTTPClient] Closed connection on 400 response")
 	}
 
 	c.redirectsCount = 0

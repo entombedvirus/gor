@@ -25,9 +25,10 @@ func (h *MultiOption) Set(value string) error {
 
 // AppSettings is the struct of main configuration
 type AppSettings struct {
-	verbose bool
-	debug   bool
-	stats   bool
+	verbose   bool
+	debug     bool
+	stats     bool
+	exitAfter time.Duration
 
 	splitOutput bool
 
@@ -74,6 +75,7 @@ func init() {
 	flag.BoolVar(&Settings.verbose, "verbose", false, "Turn on more verbose output")
 	flag.BoolVar(&Settings.debug, "debug", false, "Turn on debug output, shows all intercepted traffic. Works only when with `verbose` flag")
 	flag.BoolVar(&Settings.stats, "stats", false, "Turn on queue stats output")
+	flag.DurationVar(&Settings.exitAfter, "exit-after", 0, "exit after specified duration")
 
 	flag.BoolVar(&Settings.splitOutput, "split-output", false, "By default each output gets same traffic. If set to `true` it splits traffic equally among all outputs.")
 
@@ -110,13 +112,13 @@ func init() {
 
 	flag.StringVar(&Settings.middleware, "middleware", "", "Used for modifying traffic using external command")
 
-	flag.Var(&Settings.inputHTTP, "input-http", "Read requests from HTTP, should be explicitly sent from your application:\n\t# Listen for http on 9000\n\tgor --input-http :9000 --output-http staging.com")
+	// flag.Var(&Settings.inputHTTP, "input-http", "Read requests from HTTP, should be explicitly sent from your application:\n\t# Listen for http on 9000\n\tgor --input-http :9000 --output-http staging.com")
 
 	flag.Var(&Settings.outputHTTP, "output-http", "Forwards incoming requests to given http address.\n\t# Redirect all incoming requests to staging.com address \n\tgor --input-raw :80 --output-http http://staging.com")
 	flag.IntVar(&Settings.outputHTTPConfig.BufferSize, "output-http-response-buffer", 0, "HTTP response buffer size, all data after this size will be discarded.")
 	flag.IntVar(&Settings.outputHTTPConfig.workers, "output-http-workers", 0, "Gor uses dynamic worker scaling by default.  Enter a number to run a set number of workers.")
 	flag.IntVar(&Settings.outputHTTPConfig.redirectLimit, "output-http-redirects", 0, "Enable how often redirects should be followed.")
-	flag.DurationVar(&Settings.outputHTTPConfig.Timeout, "output-http-timeout", 0, "Specify HTTP request/response timeout. By default 5s. Example: --output-http-timeout 30s")
+	flag.DurationVar(&Settings.outputHTTPConfig.Timeout, "output-http-timeout", 5 * time.Second, "Specify HTTP request/response timeout. By default 5s. Example: --output-http-timeout 30s")
 
 	flag.BoolVar(&Settings.outputHTTPConfig.stats, "output-http-stats", false, "Report http output queue stats to console every 5 seconds.")
 	flag.BoolVar(&Settings.outputHTTPConfig.OriginalHost, "http-original-host", false, "Normally gor replaces the Host http header with the host supplied with --output-http.  This option disables that behavior, preserving the original Host header.")
@@ -143,7 +145,7 @@ func init() {
 	flag.Var(&Settings.modifierConfig.headerFilters, "http-allow-header", "A regexp to match a specific header against. Requests with non-matching headers will be dropped:\n\t gor --input-raw :8080 --output-http staging.com --http-allow-header api-version:^v1")
 	flag.Var(&Settings.modifierConfig.headerFilters, "output-http-header-filter", "WARNING: `--output-http-header-filter` DEPRECATED, use `--http-allow-header` instead")
 
-	flag.Var(&Settings.modifierConfig.headerFilters, "http-disallow-header", "A regexp to match a specific header against. Requests with matching headers will be dropped:\n\t gor --input-raw :8080 --output-http staging.com --http-disallow-header \"User-Agent: Replayed by Gor\"")
+	flag.Var(&Settings.modifierConfig.headerNegativeFilters, "http-disallow-header", "A regexp to match a specific header against. Requests with matching headers will be dropped:\n\t gor --input-raw :8080 --output-http staging.com --http-disallow-header \"User-Agent: Replayed by Gor\"")
 
 	flag.Var(&Settings.modifierConfig.headerHashFilters, "http-header-limiter", "Takes a fraction of requests, consistently taking or rejecting a request based on the FNV32-1A hash of a specific header:\n\t gor --input-raw :8080 --output-http staging.com --http-header-imiter user-id:25%")
 	flag.Var(&Settings.modifierConfig.headerHashFilters, "output-http-header-hash-filter", "WARNING: `output-http-header-hash-filter` DEPRECATED, use `--http-header-hash-limiter` instead")
